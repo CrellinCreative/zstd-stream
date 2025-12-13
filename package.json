@@ -1,0 +1,63 @@
+{
+  "name": "zstd-stream",
+  "version": "1.0.0",
+  "description": "Simple and efficient Zstandard compression/decompression for Node.js and browsers",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist/",
+    "README.md"
+  ],
+  "scripts": {
+    "clean": "rimraf dist",
+    "build": "tsc",
+    "rebuild": "npm run clean && npm run build",
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
+    "test:watch": "node --experimental-vm-modules node_modules/jest/bin/jest.js --watch",
+    "test:coverage": "node --experimental-vm-modules node_modules/jest/bin/jest.js --coverage",
+    "test:unit": "node --experimental-vm-modules node_modules/jest/bin/jest.js --testPathIgnorePatterns=integration",
+    "test:integration": "node --experimental-vm-modules node_modules/jest/bin/jest.js integration.test.ts",
+    "prepare": "npm run build",
+    "prepack": "npm run clean && npm run build",
+    "prepublishOnly": "npm test",
+    "pack:check": "npm run prepack && npm pack --dry-run",
+    "publish:dry": "npm publish --dry-run"
+  },
+  "keywords": [
+    "zstd",
+    "zstandard",
+    "compression",
+    "decompression",
+    "wasm",
+    "stream",
+    "esm"
+  ],
+  "author": "Crellin Creative",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/crellincreative/zstd-stream.git"
+  },
+  "bugs": {
+    "url": "https://github.com/crellincreative/zstd-stream/issues"
+  },
+  "devDependencies": {
+    "@types/jest": "^30.0.0",
+    "@types/node": "^24.10.3",
+    "jest": "^30.2.0",
+    "rimraf": "^6.1.2",
+    "ts-jest": "^29.4.6",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
