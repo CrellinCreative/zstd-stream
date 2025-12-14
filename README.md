@@ -38,7 +38,7 @@ npm install zstd-stream
 
 ### Basic Text Compression
 
-**⚠️ Note:** This method loads entire data into memory. For large files (>100MB), use streaming instead.
+**⚠️ Note:** This method loads all data into memory. For large files (>100MB), use streaming instead.
 
 ```typescript
 import { compress, decompress } from "zstd-stream";
@@ -88,9 +88,9 @@ while (true) {
 console.log(result);
 ```
 
-**⚠️ Performance Note:** Handle compression via Web Workers for browser deployment to avoid degrading the application's performance!
-
 ### Browser: Download Compressed File with StreamSaver.js
+
+**⚠️ Performance Note:** Handle compression via Web Workers for browser deployment to avoid degrading the application's performance!
 
 ```typescript
 import { compressStream } from "zstd-stream";
@@ -108,8 +108,8 @@ const compressed = await compressStream(fileStream, {
   },
 });
 
-// Save to disk as .zstd
-const fileWriteStream = streamSaver.createWriteStream(`${file.name}.zstd`);
+// Save to disk as .zst
+const fileWriteStream = streamSaver.createWriteStream(`${file.name}.zst`);
 const writer = fileWriteStream.getWriter();
 
 const reader = compressed.getReader();
@@ -170,22 +170,6 @@ Compress data in one operation. Best for small files.
 const compressed = await compress(data, { level: 9 });
 ```
 
-### `decompress(input, options?)`
-
-Decompress data in one operation.
-
-**Parameters:**
-
-- `input: Uint8Array` - Compressed data
-- `options?: DecompressOptions`
-  - `onProgress?: (bytesWritten: number) => void` - Progress callback
-
-**Returns:** `Promise<Uint8Array>`
-
-```typescript
-const decompressed = await decompress(compressed);
-```
-
 ### `compressStream(input, options?)`
 
 Compress a readable stream. Best for large files.
@@ -201,6 +185,22 @@ Compress a readable stream. Best for large files.
 
 ```typescript
 const compressed = await compressStream(fileStream, { level: 5 });
+```
+
+### `decompress(input, options?)`
+
+Decompress data in one operation.
+
+**Parameters:**
+
+- `input: Uint8Array` - Compressed data
+- `options?: DecompressOptions`
+  - `onProgress?: (bytesWritten: number) => void` - Progress callback
+
+**Returns:** `Promise<Uint8Array>`
+
+```typescript
+const decompressed = await decompress(compressed);
 ```
 
 ### `decompressStream(input, options?)`
