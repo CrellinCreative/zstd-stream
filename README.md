@@ -26,6 +26,12 @@ Built on the latest Zstandard v2 compression algorithm, `zstd-stream` is one of 
 
 ---
 
+## Demo (Angular)
+
+[![Browser Demo](https://img.shields.io/badge/demo-live-brightgreen)](https://crellincreative.github.io/zstd-stream/)
+
+---
+
 ## Installation
 
 ```bash
