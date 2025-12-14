@@ -1,0 +1,42 @@
+<div class="container">
+  <h1>File Compressor/Decompressor</h1>
+
+  @if (mode()) {
+  <div class="mode-info">
+    <span class="mode-badge" [class]="mode()">
+      {{ mode() === 'compress' ? 'Compress' : 'Decompress' }}
+    </span>
+  </div>
+  }
+
+  <div class="file-input">
+    <input type="file" id="fileInput" (change)="onFileSelected($event)" hidden>
+    <button (click)="triggerFileInput()" [disabled]="isProcessing()" class="upload-btn">
+      {{ isProcessing() ? 'Processing...' : 'Select File' }}
+    </button>
+    @if (fileName()) {
+    <span class="file-name">{{ fileName() }}</span>
+    }
+  </div>
+
+  @if (isProcessing()) {
+  <div class="progress">
+    <div class="progress-bar">
+      <div class="progress-fill" [style.width.%]="progress()"></div>
+    </div>
+    <span>{{ progress() }}%</span>
+  </div>
+  }
+
+  <div class="status">
+    <span class="status-text">{{ status() }}</span>
+    @if (error()) {
+    <span class="error">{{ error() }}</span>
+    }
+  </div>
+
+  <div class="instructions">
+    <p><strong>Compress:</strong> Select any file to compress it to .zst format</p>
+    <p><strong>Decompress:</strong> Select a .zst file to restore the original file</p>
+  </div>
+</div>

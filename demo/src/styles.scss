@@ -1,0 +1,123 @@
+:root {
+  --color-primary: #4caf50;
+  --color-primary-hover: #45a049;
+  --color-secondary: #2196f3;
+  --color-error: #f44336;
+  --color-text-muted: #666;
+  --color-bg-light: #f8f9fa;
+}
+
+.container {
+  max-width: 600px;
+  margin: 2rem auto;
+  padding: 1.5rem;
+  text-align: center;
+}
+
+.mode-badge {
+  display: inline-block;
+  padding: 0.25rem 0.5rem;
+  border-radius: 12px;
+  font-size: 0.875rem;
+  font-weight: bold;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: white;
+
+  &.compress {
+    background: var(--color-primary);
+  }
+  &.decompress {
+    background: var(--color-secondary);
+  }
+}
+
+.file-input {
+  margin: 1.5rem 0;
+}
+
+.upload-btn {
+  background: var(--color-primary);
+  color: white;
+  border: none;
+  padding: 0.75rem 1.5rem;
+  border-radius: 4px;
+  font-size: 1rem;
+  cursor: pointer;
+  transition: background 0.3s;
+
+  &:hover:not(:disabled) {
+    background: var(--color-primary-hover);
+  }
+
+  &:disabled {
+    background: #ccc;
+    cursor: not-allowed;
+  }
+}
+
+.file-name {
+  display: block;
+  margin-top: 0.5rem;
+  font-size: 0.875rem;
+  color: var(--color-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.progress {
+  margin: 1.5rem 0;
+
+  span {
+    font-size: 0.875rem;
+    color: var(--color-text-muted);
+  }
+}
+
+.progress-bar {
+  height: 8px;
+  background: #e0e0e0;
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 0.25rem;
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--color-secondary);
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.status {
+  margin-top: 1rem;
+  min-height: 1.5rem;
+}
+
+.status-text {
+  color: var(--color-primary);
+}
+
+.error {
+  color: var(--color-error);
+  display: block;
+  margin-top: 0.25rem;
+}
+
+.instructions {
+  margin-top: 2rem;
+  padding: 1rem;
+  background: var(--color-bg-light);
+  border-radius: 8px;
+  text-align: left;
+  font-size: 0.875rem;
+  color: var(--color-text-muted);
+
+  p {
+    margin: 0.5rem 0;
+  }
+  strong {
+    color: #333;
+  }
+}
