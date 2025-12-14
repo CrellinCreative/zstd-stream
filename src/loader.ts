@@ -1,4 +1,3 @@
-// src/loader.ts
 import { lib } from "./lib.js";
 import type { Module } from "./types.ts";
 
@@ -35,28 +34,19 @@ async function evaluateCode(code: string): Promise<any> {
       const url = `data:text/javascript,${encodeURIComponent(code)}`;
       const mod = await import(/* @vite-ignore */ url);
       return mod.default || mod.ZstdWasm || mod;
-    } catch (e) {
+    } catch (e: any) {
+      if (e.code !== "ERR_UNKNOWN_FILE_EXTENSION") {
+        console.debug("Data URL import failed:", e?.message);
+      }
       const vm = await import("node:vm");
-      // Optionally import util if you want guaranteed TextEncoder/Decoder (Node <12 fallback)
-      // But Node ≥ 12 has them globally
-      const { TextEncoder, TextDecoder } = await import("node:util"); // safe to use
-      const URL = globalThis.URL;
 
       // Create a context with required globals
       const context = vm.createContext({
-        // ES module-compatible globals
+        ...globalThis, // Start with real globals
+        // Override only what's needed
+        console,
         TextEncoder,
         TextDecoder,
-        Buffer, // global in Node
-        URL, // global
-        Uint8Array, // global
-        ArrayBuffer, // global
-        DataView, // global
-        // Some WASM loaders check these
-        window: {}, // dummy
-        self: {}, // dummy (for Web Worker env check)
-        globalThis: {}, // harmless stub
-        // Avoid require/module/exports — ESM doesn’t use them
       });
 
       // Create and evaluate as ESM
