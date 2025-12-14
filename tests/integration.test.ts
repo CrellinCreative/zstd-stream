@@ -1,6 +1,35 @@
 // src/__tests__/integration.test.ts
 import { beforeAll, describe, expect, it } from "@jest/globals";
-import { compress, decompress, initialize } from "../src/index.js";
+import {
+  compress,
+  compressStream,
+  decompress,
+  decompressStream,
+  initialize,
+} from "../src/index.js";
+
+async function streamToArray(
+  stream: ReadableStream<Uint8Array>
+): Promise<Uint8Array> {
+  const chunks: Uint8Array[] = [];
+  const reader = stream.getReader();
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+  }
+
+  const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+  const result = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.length;
+  }
+
+  return result;
+}
 
 describe("Integration Tests", () => {
   beforeAll(async () => {
@@ -9,12 +38,13 @@ describe("Integration Tests", () => {
 
   describe("round-trip compression", () => {
     it("handles small text", async () => {
-      const original = new TextEncoder().encode("Hello, World!");
+      const testString = "Hello, World!";
+      const original = new TextEncoder().encode(testString);
 
       const compressed = await compress(original);
       const decompressed = await decompress(compressed);
 
-      expect(new TextDecoder().decode(decompressed)).toBe("Hello, World!");
+      expect(new TextDecoder().decode(decompressed)).toBe(testString);
     }, 10000);
 
     it("handles large text", async () => {
@@ -76,10 +106,11 @@ describe("Integration Tests", () => {
         },
       });
 
-      const compressed = await compress(stream);
-      const decompressed = await decompress(compressed);
+      const compressed = await compressStream(stream);
+      const decompressed = await decompressStream(compressed);
 
-      expect(new TextDecoder().decode(decompressed)).toBe(
+      const result = await streamToArray(decompressed);
+      expect(new TextDecoder().decode(result)).toBe(
         "First chunk. Second chunk. Third chunk."
       );
     }, 10000);
@@ -95,8 +126,9 @@ describe("Integration Tests", () => {
         },
       });
 
-      const decompressed = await decompress(stream);
-      expect(decompressed).toEqual(original);
+      const decompressed = await decompressStream(stream);
+      const result = await streamToArray(decompressed);
+      expect(result).toEqual(original);
     }, 10000);
   });
 
@@ -180,5 +212,106 @@ describe("Integration Tests", () => {
         expect(await decompress(compressed)).toEqual(data);
       }
     }, 15000);
+  });
+  describe("backpressure", () => {
+    it("applies backpressure with realistic data", async () => {
+      let sourcePullCount = 0;
+      const CHUNK_SIZE = 8192; // 8KB chunks
+      const TOTAL_CHUNKS = 200; // 1.6MB total
+
+      // Generate varied, realistic data that compresses incrementally
+      const source = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (sourcePullCount < TOTAL_CHUNKS) {
+            const chunk = new Uint8Array(CHUNK_SIZE);
+
+            // Mix of patterns: repeated sequences + random-ish data
+            // This mimics real-world text/binary files
+            for (let i = 0; i < CHUNK_SIZE; i++) {
+              const offset = sourcePullCount * CHUNK_SIZE + i;
+              // Combination of patterns and pseudo-random values
+              chunk[i] = offset % 256 ^ (offset / 256) % 128;
+            }
+
+            sourcePullCount++;
+            controller.enqueue(chunk);
+          } else {
+            controller.close();
+          }
+        },
+      });
+
+      const compressed = await compressStream(source);
+      const reader = compressed.getReader();
+
+      // Read just a few output chunks
+      let outputChunks = 0;
+      for (let i = 0; i < 5; i++) {
+        const { done } = await reader.read();
+        if (done) break;
+        outputChunks++;
+      }
+
+      // Verify backpressure: source shouldn't be fully consumed
+      // With realistic data, compression produces output regularly
+      // so source pulls should be bounded relative to output reads
+      expect(sourcePullCount).toBeLessThan(TOTAL_CHUNKS);
+      expect(sourcePullCount).toBeGreaterThan(0);
+      expect(outputChunks).toBeGreaterThan(0);
+
+      // Cleanup
+      reader.releaseLock();
+    }, 10000);
+
+    //   it("stops reading on cancel", async () => {
+    //     let produced = 0;
+
+    //     const source = new ReadableStream<Uint8Array>({
+    //       pull(controller) {
+    //         produced++;
+    //         controller.enqueue(new Uint8Array(1024));
+    //       },
+    //     });
+
+    //     const compressed = await compressStream(source);
+    //     const reader = compressed.getReader();
+
+    //     for (let i = 0; i < 5; i++) await reader.read();
+    //     await reader.cancel();
+    //     await new Promise((resolve) => setTimeout(resolve, 100));
+
+    //     // Should only produce what was needed + small buffer
+    //     expect(produced).toBeLessThan(15);
+    //   }, 10000);
+
+    //   it("applies backpressure through pipeline", async () => {
+    //     let produced = 0;
+    //     let consumed = 0;
+
+    //     const source = new ReadableStream<Uint8Array>({
+    //       pull(controller) {
+    //         if (produced < 50) {
+    //           controller.enqueue(new Uint8Array(2048).fill(produced % 256));
+    //           produced++;
+    //         } else {
+    //           controller.close();
+    //         }
+    //       },
+    //     });
+
+    //     const compressed = await compressStream(source);
+    //     const decompressed = await decompressStream(compressed);
+    //     const reader = decompressed.getReader();
+
+    //     while (true) {
+    //       const { done } = await reader.read();
+    //       if (done) break;
+    //       consumed++;
+    //       await new Promise((resolve) => setTimeout(resolve, 20));
+    //       expect(produced - consumed).toBeLessThanOrEqual(15);
+    //     }
+
+    //     expect(produced).toBe(50);
+    //   }, 30000);
   });
 });

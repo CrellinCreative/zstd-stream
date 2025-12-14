@@ -1,5 +1,3 @@
-// src/types.ts
-
 export interface Module {
   _createCCtx(): number;
   _createDCtx(): number;

@@ -1,4 +1,3 @@
-// src/compressor.ts
 import { getModule } from "./loader.js";
 import type { Module } from "./types.js";
 
@@ -23,8 +22,8 @@ export class ZstdCompressor extends BaseProcessor {
 
   constructor(private level: number) {
     super();
-    if (level < 1 || level > 22) {
-      throw new Error("Compression level must be between 1 and 22");
+    if (level < 1 || level > 19) {
+      throw new Error("Compression level must be between 1 and 19");
     }
   }
 
