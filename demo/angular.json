@@ -36,7 +36,7 @@
           "configurations": {
             "production": {
               "outputPath": {
-                "base": "dist/",
+                "base": "dist/zstd-stream",
                 "browser": "."
               },
               "budgets": [
