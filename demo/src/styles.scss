@@ -37,20 +37,20 @@
 }
 
 .upload-btn {
+  display: inline-block;
   background: var(--color-primary);
   color: white;
-  border: none;
   padding: 0.75rem 1.5rem;
   border-radius: 4px;
   font-size: 1rem;
   cursor: pointer;
   transition: background 0.3s;
 
-  &:hover:not(:disabled) {
+  &:hover:not(.disabled) {
     background: var(--color-primary-hover);
   }
 
-  &:disabled {
+  &.disabled {
     background: #ccc;
     cursor: not-allowed;
   }
@@ -120,4 +120,24 @@
   strong {
     color: #333;
   }
+  code {
+    padding: 0.1rem 0.3rem;
+    background: #e9ecef;
+    border-radius: 3px;
+    font-size: 0.85em;
+  }
+}
+
+.flex {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.selector {
+  margin: 1rem;
+  padding: 0.5rem;
+  border-radius: 0.25rem;
+  font-size: large;
+  border: none;
 }

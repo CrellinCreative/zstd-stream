@@ -1,19 +1,25 @@
 <div class="container">
-  <h1>File Compressor/Decompressor</h1>
+  <h1>Zstd File Compressor</h1>
 
-  @if (mode()) {
-  <div class="mode-info">
-    <span class="mode-badge" [class]="mode()">
-      {{ mode() === 'compress' ? 'Compress' : 'Decompress' }}
-    </span>
-  </div>
+  @if (mode(); as m) {
+  <span class="mode-badge" [class]="m">{{ m }}</span>
   }
 
   <div class="file-input">
-    <input type="file" id="fileInput" (change)="onFileSelected($event)" hidden>
-    <button (click)="triggerFileInput()" [disabled]="isProcessing()" class="upload-btn">
-      {{ isProcessing() ? 'Processing...' : 'Select File' }}
-    </button>
+    <div class="flex">
+      <label class="upload-btn" [class.disabled]="isProcessing()">
+        {{ isProcessing() ? 'Processing…' : 'Select file' }}
+        <input type="file" hidden [disabled]="isProcessing()" (change)="onFileSelected($event)" />
+
+      </label>
+      <select class="selector" (change)="onLevelSelected($event)">
+        @for(l of levels(); track l) {
+        <option [value]="l" [selected]="l===selected()">
+          {{l}}
+        </option>
+        }
+      </select>
+    </div>
     @if (fileName()) {
     <span class="file-name">{{ fileName() }}</span>
     }
@@ -30,13 +36,13 @@
 
   <div class="status">
     <span class="status-text">{{ status() }}</span>
-    @if (error()) {
-    <span class="error">{{ error() }}</span>
+    @if (error(); as e) {
+    <span class="error">{{ e }}</span>
     }
   </div>
 
   <div class="instructions">
-    <p><strong>Compress:</strong> Select any file to compress it to .zst format</p>
-    <p><strong>Decompress:</strong> Select a .zst file to restore the original file</p>
+    <p><strong>Compress</strong> — select any file to produce a <code>.zst</code></p>
+    <p><strong>Decompress</strong> — select a <code>.zst</code> file to restore it</p>
   </div>
 </div>

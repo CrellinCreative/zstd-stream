@@ -1,5 +1,5 @@
 import { lib } from "./lib.js";
-import type { Module } from "./types.ts";
+import type { Module } from "./types.js";
 
 let module: Module | null = null;
 let initPromise: Promise<void> | null = null;
@@ -34,10 +34,8 @@ async function evaluateCode(code: string): Promise<any> {
       const url = `data:text/javascript,${encodeURIComponent(code)}`;
       const mod = await import(/* @vite-ignore */ url);
       return mod.default || mod.ZstdWasm || mod;
-    } catch (e: any) {
-      if (e.code !== "ERR_UNKNOWN_FILE_EXTENSION") {
-        console.debug("Data URL import failed:", e?.message);
-      }
+    } catch {
+      // Older Node (pre-22) can't import a data: URL — fall back to vm.
       const vm = await import("node:vm");
 
       // Create a context with required globals
@@ -58,8 +56,7 @@ async function evaluateCode(code: string): Promise<any> {
           // Most embedded bundles won't use this, but safe to allow
           try {
             return await import(/* @vite-ignore */ specifier);
-          } catch (e: any) {
-            console.warn(`⚠️ Dynamic import failed: ${specifier}`, e.message);
+          } catch {
             throw new Error(`Dynamic import not supported: ${specifier}`);
           }
         },

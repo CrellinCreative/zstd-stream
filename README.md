@@ -2,33 +2,28 @@
 
 # zstd-stream
 
-**High-performance Zstandard compression for Node.js and browsers with zero external dependencies**
+**Streaming Zstandard compression for Node.js and browsers — zero external dependencies, bounded memory.**
 
 [![npm version](https://img.shields.io/npm/v/zstd-stream.svg)](https://www.npmjs.com/package/zstd-stream)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![TypeScript](https://img.shields.io/badge/TypeScript-Ready-brightgreen.svg)](https://www.typescriptlang.org/)
+[![Browser Demo](https://img.shields.io/badge/demo-live-brightgreen)](https://crellincreative.github.io/zstd-stream/)
 
 </div>
 
 ---
 
-## Features
+`zstd-stream` compresses and decompresses [Zstandard](https://github.com/facebook/zstd)
+data through the Web Streams API. It streams files larger than available RAM in
+**constant memory**, propagates **backpressure** end to end, and ships the
+WebAssembly build **embedded** — no `.wasm` asset to host or configure.
 
-- 🚀 **Universal compatibility** - Works seamlessly in Node.js 18+ and modern browsers
-- 📦 **Zero external assets** - All WebAssembly code bundled internally, works out of the box
-- 🌊 **True streaming support** - Handle multi-GB files with minimal memory footprint
-- ⚡ **Backpressure handling** - Efficient memory management prevents overflow
-- 🎯 **Client-side optimization** - Reduce server load by compressing/decompressing in the browser
-- 🔧 **ESM-first** - Modern ECMAScript modules with full TypeScript support
-- 📊 **Progress tracking** - Monitor compression/decompression in real-time
-
-Built on the latest Zstandard v2 compression algorithm, `zstd-stream` is one of the only packages that embeds all WASM code internally, eliminating asset management headaches and enabling true plug-and-play compression.
-
----
-
-## Demo (Angular)
-
-[![Browser Demo](https://img.shields.io/badge/demo-live-brightgreen)](https://crellincreative.github.io/zstd-stream/)
+- 🌊 **Streaming first** — process multi-GB data in fixed ~128 KB buffers
+- ⚡ **Backpressure built in** — a slow writer automatically throttles the reader, so memory never runs away
+- 📦 **Zero external assets** — WASM is bundled in; `npm install` and import
+- 🌍 **Universal** — the same code runs in Node.js 18+ and modern browsers
+- 🔧 **ESM + TypeScript** — full type definitions included
+- 📊 **Progress callbacks** — observe bytes processed in real time
 
 ---
 
@@ -40,241 +35,232 @@ npm install zstd-stream
 
 ---
 
-## Usage Examples
+## Quick start
 
-### Basic Text Compression
-
-**⚠️ Note:** This method loads all data into memory. For large files (>100MB), use streaming instead.
-
-```typescript
-import { compress, decompress } from "zstd-stream";
-
-// Compress text
-const text = "Hello, world!";
-const input = new TextEncoder().encode(text);
-const compressed = await compress(input, { level: 3 });
-
-// Decompress
-const decompressed = await decompress(compressed);
-const output = new TextDecoder().decode(decompressed);
-
-console.log(output); // "Hello, world!"
-```
-
-### Streaming Large Files (Recommended)
-
-**✅ Use this for large files** - Processes data in chunks with constant memory usage.
+Everything operates on `ReadableStream<Uint8Array>` — the same stream type
+returned by `fetch`, `Blob.stream()`, `File.stream()`, and Node's
+`Readable.toWeb()`.
 
 ```typescript
 import { compressStream, decompressStream } from "zstd-stream";
 
-// Compress a stream
-const textStream = new ReadableStream({
-  start(controller) {
-    controller.enqueue(new TextEncoder().encode("Large text data..."));
-    controller.close();
-  },
-});
+// Compress any byte stream...
+const compressed = await compressStream(source, { level: 3 });
 
-const compressedStream = await compressStream(textStream, { level: 5 });
+// ...and decompress it back.
+const restored = await decompressStream(compressed);
 
-// Decompress a stream
-const decompressedStream = await decompressStream(compressedStream);
-
-// Read the result
-const reader = decompressedStream.getReader();
-let result = "";
-
-while (true) {
-  const { done, value } = await reader.read();
-  if (done) break;
-  result += new TextDecoder().decode(value);
-}
-
-console.log(result);
+// Collect a stream into bytes (or use .text() for strings):
+const bytes = new Uint8Array(await new Response(restored).arrayBuffer());
 ```
 
-### Browser: Download Compressed File with StreamSaver.js
+Prefer streaming wherever the data is large or arrives incrementally. For small,
+fully in-memory buffers there are one-shot [`compress`](#compressinput-options) /
+[`decompress`](#decompressinput-options) helpers.
 
-**⚠️ Performance Note:** Handle compression via Web Workers for browser deployment to avoid degrading the application's performance!
+---
+
+## Recipes
+
+### Compress a file and upload it
+
+Pipe the compressed stream straight into a `fetch` request body — nothing is
+buffered in full.
+
+```typescript
+import { compressStream } from "zstd-stream";
+
+const file = document.querySelector<HTMLInputElement>("input[type=file]")!.files![0];
+const compressed = await compressStream(file.stream(), { level: 6 });
+
+await fetch("/upload", {
+  method: "POST",
+  headers: { "Content-Encoding": "zstd" },
+  body: compressed,
+  duplex: "half", // required when streaming a request body
+});
+```
+
+### Download and decompress
+
+```typescript
+import { decompressStream } from "zstd-stream";
+
+const res = await fetch("/data.zst");
+const decompressed = await decompressStream(res.body!);
+
+const text = await new Response(decompressed).text();
+```
+
+### Save a compressed file to disk (browser)
+
+`pipeTo` drives the whole transfer and applies backpressure for you.
 
 ```typescript
 import { compressStream } from "zstd-stream";
 import streamSaver from "streamsaver";
 
-// User selects a file
-const file = document.querySelector('input[type="file"]').files[0];
-const fileStream = file.stream();
-
-// Compress the file
-const compressed = await compressStream(fileStream, {
+const compressed = await compressStream(file.stream(), {
   level: 9,
-  onProgress: (bytes) => {
-    console.log(`Compressed: ${(bytes / 1024 / 1024).toFixed(2)} MB`);
-  },
+  onProgress: (bytes) => console.log(`${(bytes / 1e6).toFixed(1)} MB written`),
 });
 
-// Save to disk as .zst
-const fileWriteStream = streamSaver.createWriteStream(`${file.name}.zst`);
-const writer = fileWriteStream.getWriter();
-
-const reader = compressed.getReader();
-while (true) {
-  const { done, value } = await reader.read();
-  if (done) break;
-  await writer.write(value);
-}
-
-await writer.close();
+await compressed.pipeTo(streamSaver.createWriteStream(`${file.name}.zst`));
 ```
 
-### Stream File to Server via HTTP
+> **Tip:** compression is CPU-intensive. In the browser, run it inside a Web
+> Worker to keep the UI responsive.
+
+### Compress a file on disk (Node.js)
 
 ```typescript
+import { createReadStream, createWriteStream } from "node:fs";
+import { Readable, Writable } from "node:stream";
 import { compressStream } from "zstd-stream";
 
-// Get file from user input
-const file = document.querySelector('input[type="file"]').files[0];
-const fileStream = file.stream();
+const source = Readable.toWeb(createReadStream("big.log")) as ReadableStream<Uint8Array>;
+const compressed = await compressStream(source, { level: 6 });
 
-// Compress and upload
-const compressed = await compressStream(fileStream, { level: 6 });
+await compressed.pipeTo(Writable.toWeb(createWriteStream("big.log.zst")));
+```
 
-const response = await fetch("https://api.example.com/upload", {
-  method: "POST",
-  headers: {
-    "Content-Type": "application/zstd",
-    "Content-Encoding": "zstd",
-  },
-  body: compressed,
-  duplex: "half", // Required for streaming request bodies
-});
+### Small, in-memory data
 
-if (response.ok) {
-  console.log("Upload complete!");
-}
+When you already hold the whole payload, skip the streams:
+
+```typescript
+import { compress, decompress } from "zstd-stream";
+
+const data = new TextEncoder().encode("Hello, world!");
+const compressed = await compress(data, { level: 3 });
+const restored = await decompress(compressed);
+
+console.log(new TextDecoder().decode(restored)); // "Hello, world!"
 ```
 
 ---
 
-## API Reference
+## Memory & backpressure
 
-### `compress(input, options?)`
+The streaming API is built to handle data far larger than available RAM:
 
-Compress data in one operation. Best for small files.
+- **Bounded memory** — data flows through fixed ~128 KB working buffers and is
+  emitted one slice at a time. A compressed chunk that expands to gigabytes is
+  never decoded into a single allocation.
+- **Backpressure** — output is produced lazily, one slice per read, so a slow
+  consumer (disk, network) throttles reads from the source. A fast producer
+  cannot outrun a slow consumer and pile up in memory.
+- **Tunable buffering** — `highWaterMark` (bytes) sets how much output may queue
+  before reads pause. Larger values trade memory for throughput.
 
-**Parameters:**
+The one-shot `compress` / `decompress` helpers, by contrast, hold the entire
+input and output in memory — use them only for small data.
 
-- `input: Uint8Array` - Data to compress
-- `options?: CompressOptions`
-  - `level?: number` - Compression level (1-19, default: 3)
-  - `onProgress?: (bytesWritten: number) => void` - Progress callback
+---
 
-**Returns:** `Promise<Uint8Array>`
+## API reference
 
-```typescript
-const compressed = await compress(data, { level: 9 });
-```
+All functions are async and lazily initialize the WASM module on first use.
 
 ### `compressStream(input, options?)`
 
-Compress a readable stream. Best for large files.
+Compress a stream. The primary API.
 
-**Parameters:**
-
-- `input: ReadableStream<Uint8Array>` - Stream to compress
+- `input: ReadableStream<Uint8Array>`
 - `options?: CompressOptions`
-  - `level?: number` - Compression level (1-19, default: 3)
-  - `onProgress?: (bytesWritten: number) => void` - Progress callback
+  - `level?: number` — compression level 1–19 (default: `3`)
+  - `onProgress?: (bytesWritten: number) => void` — cumulative compressed bytes
+  - `highWaterMark?: number` — output bytes buffered before backpressure pauses the source (default: 1 MiB)
 
 **Returns:** `Promise<ReadableStream<Uint8Array>>`
-
-```typescript
-const compressed = await compressStream(fileStream, { level: 5 });
-```
-
-### `decompress(input, options?)`
-
-Decompress data in one operation.
-
-**Parameters:**
-
-- `input: Uint8Array` - Compressed data
-- `options?: DecompressOptions`
-  - `onProgress?: (bytesWritten: number) => void` - Progress callback
-
-**Returns:** `Promise<Uint8Array>`
-
-```typescript
-const decompressed = await decompress(compressed);
-```
 
 ### `decompressStream(input, options?)`
 
-Decompress a readable stream with backpressure support.
+Decompress a stream.
 
-**Parameters:**
-
-- `input: ReadableStream<Uint8Array>` - Compressed stream
+- `input: ReadableStream<Uint8Array>`
 - `options?: DecompressOptions`
-  - `onProgress?: (bytesWritten: number) => void` - Progress callback
+  - `onProgress?: (bytesWritten: number) => void` — cumulative decompressed bytes
+  - `highWaterMark?: number` — output bytes buffered before backpressure pauses the source (default: 1 MiB)
 
 **Returns:** `Promise<ReadableStream<Uint8Array>>`
 
-```typescript
-const decompressed = await decompressStream(compressedStream);
-```
+### `compress(input, options?)`
+
+One-shot compression of an in-memory buffer. Holds all data in memory.
+
+- `input: Uint8Array`
+- `options?: CompressOptions` — `level`, `onProgress` (as above)
+
+**Returns:** `Promise<Uint8Array>`
+
+### `decompress(input, options?)`
+
+One-shot decompression of an in-memory buffer. Holds all data in memory.
+
+- `input: Uint8Array`
+- `options?: DecompressOptions` — `onProgress` (as above)
+
+**Returns:** `Promise<Uint8Array>`
 
 ### `initialize()`
 
-Pre-initialize the WASM module (optional). Call during app startup to avoid initialization delay on first use.
+Optional. Pre-loads the WASM module so the first compress/decompress call has no
+startup cost. Safe to call multiple times.
 
 **Returns:** `Promise<void>`
 
 ```typescript
-await initialize();
+import { initialize } from "zstd-stream";
+
+await initialize(); // e.g. during app startup
 ```
 
 ---
 
-## Compression Levels
+## Compression levels
 
-Levels 1-19 are supported. Higher levels provide diminishing returns.
+Levels **1–19** are supported (default: `3`). Higher levels compress more but
+cost more time and memory; "ultra" levels 20–22 are intentionally excluded
+because, in streaming mode, they force every decompressor to allocate a 128 MB
+window — even for tiny inputs.
 
-| Level | Speed     | Ratio    | Use Case                           |
-| ----- | --------- | -------- | ---------------------------------- |
-| 1-3   | Fast      | Lower    | Real-time, network streaming       |
-| 3-7   | Medium    | Balanced | General purpose (recommended)      |
-| 8-15  | Slow      | Better   | File storage, archival             |
-| 16-19 | Very slow | Maximum  | One-time compression, cold storage |
+Out-of-range values are clamped to the nearest valid level (with a
+`console.warn`) rather than throwing — e.g. `level: 22` runs as `19`.
 
-**Default level:** 3 (optimal balance of speed and compression)
-
----
-
-## Browser Compatibility
-
-- Chrome/Edge 80+
-- Firefox 113+
-- Safari 16.4+
-- Node.js 18+
-
-Requires WebAssembly and ES2022 support.
+| Level | Speed     | Ratio    | Typical use                   |
+| ----- | --------- | -------- | ----------------------------- |
+| 1–3   | Fast      | Lower    | Real-time, network streaming  |
+| 4–7   | Balanced  | Good     | General purpose (recommended) |
+| 8–15  | Slow      | Better   | File storage, archival        |
+| 16–19 | Very slow | Maximum  | One-time / cold storage       |
 
 ---
 
 ## TypeScript
-
-Full type definitions included:
 
 ```typescript
 import type { CompressOptions, DecompressOptions } from "zstd-stream";
 
 const options: CompressOptions = {
   level: 9,
+  highWaterMark: 4 * 1024 * 1024,
   onProgress: (bytes) => console.log(`Progress: ${bytes}`),
 };
 ```
+
+---
+
+## Compatibility
+
+| Environment | Minimum |
+| ----------- | ------- |
+| Node.js     | 18      |
+| Chrome/Edge | 80      |
+| Firefox     | 113     |
+| Safari      | 16.4    |
+
+Requires WebAssembly and ES2022 support.
 
 ---
 
@@ -282,10 +268,6 @@ const options: CompressOptions = {
 
 MIT
 
----
-
-## Credits
-
-Built with [Zstandard](https://github.com/facebook/zstd) by Meta, compiled using [Emscripten SDK](https://emscripten.org/).
-
-WebAssembly module embedded internally for zero-dependency deployment.
+Built with [Zstandard](https://github.com/facebook/zstd) by Meta, compiled with
+the [Emscripten SDK](https://emscripten.org/) and embedded for zero-dependency
+deployment.

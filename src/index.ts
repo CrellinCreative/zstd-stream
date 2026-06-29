@@ -4,11 +4,20 @@ import { initZstd } from "./loader.js";
 export interface CompressOptions {
   level?: number; // 1-19, default 3
   onProgress?: (bytesWritten: number) => void;
+  /**
+   * Max bytes of output buffered before backpressure pauses reading the
+   * source. Larger values trade memory for throughput. Default: 1 MiB.
+   */
+  highWaterMark?: number;
 }
 
 export interface DecompressOptions {
   onProgress?: (bytesWritten: number) => void;
+  /** See {@link CompressOptions.highWaterMark}. Default: 1 MiB. */
+  highWaterMark?: number;
 }
+
+const DEFAULT_HIGH_WATER_MARK = 1024 * 1024;
 
 let initialized = false;
 
@@ -43,67 +52,83 @@ export async function compressStream(
   options?: CompressOptions
 ): Promise<ReadableStream<Uint8Array>> {
   await ensureInit();
-  const { level = 3, onProgress } = options || {};
+  const { level = 3, onProgress, highWaterMark = DEFAULT_HIGH_WATER_MARK } =
+    options || {};
 
   const reader = input.getReader();
-  let compressor: ZstdCompressor | null = null;
+  const compressor = new ZstdCompressor(level);
+  await compressor.init();
+
+  let chunk: Uint8Array | null = null; // current source chunk
+  let chunkPos = 0; // bytes of `chunk` already fed
+  let finishing = false; // source drained, flushing the frame
   let totalWritten = 0;
-  let inputDone = false;
 
-  return new ReadableStream<Uint8Array>({
-    async start() {
-      compressor = new ZstdCompressor(level);
-      await compressor.init();
-    },
+  const release = () => {
+    reader.releaseLock();
+    compressor.destroy();
+  };
 
-    async pull(controller) {
-      try {
-        if (inputDone) return;
-        let loopIterations = 0;
+  return new ReadableStream<Uint8Array>(
+    {
+      // Produce exactly one output slice per pull so the returned stream's
+      // queue (and thus how far we read ahead of the consumer) stays bounded.
+      async pull(controller) {
+        try {
+          while (true) {
+            if (chunk && chunkPos < chunk.length) {
+              const n = Math.min(
+                compressor.inputBufferSize,
+                chunk.length - chunkPos
+              );
+              const out = compressor.compressStep(chunk, chunkPos, n);
+              chunkPos += n;
+              if (out.length) {
+                controller.enqueue(out);
+                totalWritten += out.length;
+                onProgress?.(totalWritten);
+                return;
+              }
+              continue; // buffered internally; keep feeding
+            }
 
-        // Keep reading until we have data to enqueue or input is exhausted
-        while (!inputDone) {
-          loopIterations++;
-          const { done, value } = await reader.read();
+            if (!finishing) {
+              const { done, value } = await reader.read();
+              if (done) {
+                finishing = true;
+                continue;
+              }
+              if (value.length === 0) continue;
+              chunk = value;
+              chunkPos = 0;
+              continue;
+            }
 
-          if (done) {
-            // Final flush
-            const chunk = compressor!.process(new Uint8Array(0), true);
-            if (chunk.length > 0) {
-              controller.enqueue(chunk);
-              totalWritten += chunk.length;
+            // Flushing the final frame, one output buffer at a time.
+            const { output, done } = compressor.compressFinish();
+            if (output.length) {
+              controller.enqueue(output);
+              totalWritten += output.length;
               onProgress?.(totalWritten);
             }
-            controller.close();
-            reader.releaseLock();
-            compressor?.destroy();
-            inputDone = true;
+            if (done) {
+              controller.close();
+              release();
+            }
             return;
           }
-
-          // Process chunk
-          const chunk = compressor!.process(value, false);
-          if (chunk.length > 0) {
-            controller.enqueue(chunk);
-            totalWritten += chunk.length;
-            onProgress?.(totalWritten);
-            return; // Exit after enqueuing data
-          }
-          // If chunk is empty, continue loop to read next input chunk
+        } catch (error) {
+          release();
+          controller.error(error);
         }
-      } catch (error) {
-        inputDone = true;
-        reader.releaseLock();
-        compressor?.destroy();
-        controller.error(error);
-      }
-    },
+      },
 
-    cancel() {
-      reader.releaseLock();
-      compressor?.destroy();
+      cancel() {
+        release();
+      },
     },
-  });
+    new ByteLengthQueuingStrategy({ highWaterMark })
+  );
 }
 
 // Decompress Uint8Array -> Uint8Array
@@ -131,56 +156,72 @@ export async function decompressStream(
   options?: DecompressOptions
 ): Promise<ReadableStream<Uint8Array>> {
   await ensureInit();
-  const { onProgress } = options || {};
+  const { onProgress, highWaterMark = DEFAULT_HIGH_WATER_MARK } = options || {};
 
   const reader = input.getReader();
-  let decompressor: ZstdDecompressor | null = null;
+  const decompressor = new ZstdDecompressor();
+  await decompressor.init();
+
+  let chunk: Uint8Array | null = null; // current source chunk
+  let chunkPos = 0; // bytes of `chunk` already loaded into WASM
   let totalWritten = 0;
-  let inputDone = false;
 
-  return new ReadableStream<Uint8Array>({
-    async start() {
-      decompressor = new ZstdDecompressor();
-      await decompressor.init();
-    },
+  const release = () => {
+    reader.releaseLock();
+    decompressor.destroy();
+  };
 
-    async pull(controller) {
-      try {
-        if (inputDone) {
-          return; // Already finished
+  return new ReadableStream<Uint8Array>(
+    {
+      // One output slice per pull. A small compressed slice can expand to many
+      // gigabytes, so we never decode more than one output buffer ahead of the
+      // consumer.
+      async pull(controller) {
+        try {
+          while (true) {
+            if (decompressor.hasInput()) {
+              const out = decompressor.decompressStep();
+              if (out.length) {
+                controller.enqueue(out);
+                totalWritten += out.length;
+                onProgress?.(totalWritten);
+                return;
+              }
+              continue; // consumed input without output yet
+            }
+
+            if (chunk && chunkPos < chunk.length) {
+              const n = Math.min(
+                decompressor.inputBufferSize,
+                chunk.length - chunkPos
+              );
+              decompressor.setInput(chunk, chunkPos, n);
+              chunkPos += n;
+              continue;
+            }
+
+            const { done, value } = await reader.read();
+            if (done) {
+              controller.close();
+              release();
+              return;
+            }
+            if (value.length === 0) continue;
+            chunk = value;
+            chunkPos = 0;
+          }
+        } catch (error) {
+          release();
+          controller.error(error);
         }
+      },
 
-        const { done, value } = await reader.read();
-
-        if (done) {
-          inputDone = true;
-          controller.close();
-          reader.releaseLock();
-          decompressor?.destroy();
-          return;
-        }
-
-        const chunk = decompressor!.process(value);
-
-        if (chunk.length > 0) {
-          controller.enqueue(chunk);
-          totalWritten += chunk.length;
-          onProgress?.(totalWritten);
-        }
-      } catch (error) {
-        inputDone = true;
-        reader.releaseLock();
-        decompressor?.destroy();
-        controller.error(error);
-        throw error;
-      }
+      cancel() {
+        release();
+      },
     },
-
-    cancel() {
-      reader.releaseLock();
-      decompressor?.destroy();
-    },
-  });
+    new ByteLengthQueuingStrategy({ highWaterMark })
+  );
 }
 
 export async function initialize(): Promise<void> {

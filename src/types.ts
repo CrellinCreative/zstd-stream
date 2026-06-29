@@ -22,6 +22,8 @@ export interface Module {
   ): number;
   _dStreamOutSize(): number;
   _cStreamOutSize(): number;
+  _cStreamInSize(): number;
+  _dStreamInSize(): number;
   _getErrorName(error: number): string;
   _malloc(size: number): number;
   _free(ptr: number): void;

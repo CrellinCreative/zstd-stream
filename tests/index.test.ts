@@ -154,7 +154,13 @@ describe("compressStream (ReadableStream)", () => {
   ) => Promise<ReadableStream<Uint8Array>>;
   let mockCompressor: {
     init: jest.Mock<() => Promise<void>>;
-    process: jest.Mock<(data: Uint8Array, isLast: boolean) => Uint8Array>;
+    inputBufferSize: number;
+    compressStep: jest.Mock<
+      (data: Uint8Array, offset: number, length: number) => Uint8Array
+    >;
+    compressFinish: jest.Mock<
+      () => { output: Uint8Array; done: boolean }
+    >;
     destroy: jest.Mock<() => void>;
   };
 
@@ -165,7 +171,12 @@ describe("compressStream (ReadableStream)", () => {
 
     mockCompressor = {
       init: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
-      process: jest.fn<(data: Uint8Array, isLast: boolean) => Uint8Array>(),
+      inputBufferSize: 1024,
+      compressStep:
+        jest.fn<(d: Uint8Array, o: number, l: number) => Uint8Array>(),
+      compressFinish: jest
+        .fn<() => { output: Uint8Array; done: boolean }>()
+        .mockReturnValue({ output: new Uint8Array(0), done: true }),
       destroy: jest.fn<() => void>(),
     };
 
@@ -184,19 +195,54 @@ describe("compressStream (ReadableStream)", () => {
       },
     });
 
-    mockCompressor.process
+    mockCompressor.compressStep
       .mockReturnValueOnce(new Uint8Array([10, 20]))
-      .mockReturnValueOnce(new Uint8Array([30, 40]))
-      .mockReturnValueOnce(new Uint8Array(0));
+      .mockReturnValueOnce(new Uint8Array([30, 40]));
 
     const resultStream = await compressStream(stream);
     const result = await streamToUint8Array(resultStream);
 
     expect(result).toEqual(new Uint8Array([10, 20, 30, 40]));
-    expect(mockCompressor.process).toHaveBeenCalledTimes(3);
+    expect(mockCompressor.compressStep).toHaveBeenCalledTimes(2);
+    expect(mockCompressor.compressFinish).toHaveBeenCalled();
   });
 
-  it("skips empty chunks", async () => {
+  it("feeds source chunks in inputBufferSize-sized slices", async () => {
+    mockCompressor.inputBufferSize = 2; // force a 5-byte chunk into 3 slices
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1, 2, 3, 4, 5]));
+        controller.close();
+      },
+    });
+
+    mockCompressor.compressStep.mockReturnValue(new Uint8Array([9]));
+
+    const resultStream = await compressStream(stream);
+    await streamToUint8Array(resultStream);
+
+    expect(mockCompressor.compressStep).toHaveBeenCalledTimes(3);
+    expect(mockCompressor.compressStep).toHaveBeenNthCalledWith(
+      1,
+      new Uint8Array([1, 2, 3, 4, 5]),
+      0,
+      2
+    );
+    expect(mockCompressor.compressStep).toHaveBeenNthCalledWith(
+      2,
+      new Uint8Array([1, 2, 3, 4, 5]),
+      2,
+      2
+    );
+    expect(mockCompressor.compressStep).toHaveBeenNthCalledWith(
+      3,
+      new Uint8Array([1, 2, 3, 4, 5]),
+      4,
+      1
+    );
+  });
+
+  it("skips empty step output (engine still buffering)", async () => {
     const stream = new ReadableStream({
       start(controller) {
         controller.enqueue(new Uint8Array([1, 2]));
@@ -204,28 +250,37 @@ describe("compressStream (ReadableStream)", () => {
       },
     });
 
-    mockCompressor.process
-      .mockReturnValueOnce(new Uint8Array(0)) // First chunk - empty
-      .mockReturnValueOnce(new Uint8Array([10])) // Final flush
-      .mockReturnValue(new Uint8Array(0)); // Fallback for any extra calls
+    mockCompressor.compressStep.mockReturnValue(new Uint8Array(0));
+    mockCompressor.compressFinish.mockReturnValue({
+      output: new Uint8Array([10]),
+      done: true,
+    });
 
     const resultStream = await compressStream(stream);
     const result = await streamToUint8Array(resultStream);
+
     expect(result).toEqual(new Uint8Array([10]));
-    expect(mockCompressor.process).toHaveBeenCalledTimes(2);
-    expect(mockCompressor.process).toHaveBeenNthCalledWith(
-      1,
-      new Uint8Array([1, 2]),
-      false
-    );
-    expect(mockCompressor.process).toHaveBeenNthCalledWith(
-      2,
-      new Uint8Array(0),
-      true
-    );
   });
 
-  it("tracks progress for stream chunks", async () => {
+  it("flushes the final frame across multiple finish calls", async () => {
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.close(); // empty source
+      },
+    });
+
+    mockCompressor.compressFinish
+      .mockReturnValueOnce({ output: new Uint8Array([1, 2]), done: false })
+      .mockReturnValueOnce({ output: new Uint8Array([3]), done: true });
+
+    const resultStream = await compressStream(stream);
+    const result = await streamToUint8Array(resultStream);
+
+    expect(result).toEqual(new Uint8Array([1, 2, 3]));
+    expect(mockCompressor.compressFinish).toHaveBeenCalledTimes(2);
+  });
+
+  it("tracks cumulative progress", async () => {
     const stream = new ReadableStream({
       start(controller) {
         controller.enqueue(new Uint8Array([1, 2]));
@@ -235,10 +290,9 @@ describe("compressStream (ReadableStream)", () => {
     });
 
     const onProgress = jest.fn();
-    mockCompressor.process
+    mockCompressor.compressStep
       .mockReturnValueOnce(new Uint8Array([10, 20]))
-      .mockReturnValueOnce(new Uint8Array([30]))
-      .mockReturnValueOnce(new Uint8Array(0));
+      .mockReturnValueOnce(new Uint8Array([30]));
 
     const resultStream = await compressStream(stream, { onProgress });
     await streamToUint8Array(resultStream);
@@ -255,13 +309,12 @@ describe("compressStream (ReadableStream)", () => {
       },
     });
 
-    mockCompressor.process.mockImplementation(() => {
+    mockCompressor.compressStep.mockImplementation(() => {
       throw new Error("Compression failed");
     });
 
     const resultStream = await compressStream(stream);
 
-    // Consuming the stream triggers the error and cleanup
     await expect(streamToUint8Array(resultStream)).rejects.toThrow(
       "Compression failed"
     );
@@ -342,9 +395,29 @@ describe("decompressStream (ReadableStream)", () => {
   ) => Promise<ReadableStream<Uint8Array>>;
   let mockDecompressor: {
     init: jest.Mock<() => Promise<void>>;
-    process: jest.Mock<(data: Uint8Array) => Uint8Array>;
+    inputBufferSize: number;
+    setInput: jest.Mock<
+      (data: Uint8Array, offset: number, length: number) => void
+    >;
+    hasInput: jest.Mock<() => boolean>;
+    decompressStep: jest.Mock<() => Uint8Array>;
     destroy: jest.Mock<() => void>;
   };
+
+  // Model the engine: setInput() loads `steps` worth of decode work; each
+  // decompressStep() consumes one step. hasInput() drains accordingly.
+  function wireEngine(stepsPerInput: number, outputs: Uint8Array[]) {
+    let remaining = 0;
+    let i = 0;
+    mockDecompressor.setInput.mockImplementation(() => {
+      remaining = stepsPerInput;
+    });
+    mockDecompressor.hasInput.mockImplementation(() => remaining > 0);
+    mockDecompressor.decompressStep.mockImplementation(() => {
+      remaining--;
+      return outputs[i++] ?? new Uint8Array(0);
+    });
+  }
 
   beforeEach(async () => {
     jest.resetModules();
@@ -353,7 +426,11 @@ describe("decompressStream (ReadableStream)", () => {
 
     mockDecompressor = {
       init: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
-      process: jest.fn<(data: Uint8Array) => Uint8Array>(),
+      inputBufferSize: 1024,
+      setInput:
+        jest.fn<(d: Uint8Array, o: number, l: number) => void>(),
+      hasInput: jest.fn<() => boolean>(),
+      decompressStep: jest.fn<() => Uint8Array>(),
       destroy: jest.fn<() => void>(),
     };
 
@@ -372,14 +449,82 @@ describe("decompressStream (ReadableStream)", () => {
       },
     });
 
-    mockDecompressor.process
-      .mockReturnValueOnce(new Uint8Array([1, 2, 3]))
-      .mockReturnValueOnce(new Uint8Array([4, 5, 6]));
+    wireEngine(1, [new Uint8Array([1, 2, 3]), new Uint8Array([4, 5, 6])]);
 
     const resultStream = await decompressStream(stream);
     const result = await streamToUint8Array(resultStream);
 
     expect(result).toEqual(new Uint8Array([1, 2, 3, 4, 5, 6]));
+  });
+
+  it("emits one output slice per decode step (no accumulation)", async () => {
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new Uint8Array([10])); // one compressed chunk...
+        controller.close();
+      },
+    });
+
+    // ...expands to three separate output slices.
+    wireEngine(3, [
+      new Uint8Array([1]),
+      new Uint8Array([2]),
+      new Uint8Array([3]),
+    ]);
+
+    const resultStream = await decompressStream(stream);
+    const chunks: Uint8Array[] = [];
+    const reader = resultStream.getReader();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+    }
+
+    // Each slice is enqueued individually rather than concatenated.
+    expect(chunks).toEqual([
+      new Uint8Array([1]),
+      new Uint8Array([2]),
+      new Uint8Array([3]),
+    ]);
+  });
+
+  it("loads source chunks in inputBufferSize-sized slices", async () => {
+    mockDecompressor.inputBufferSize = 2;
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new Uint8Array([10, 20, 30, 40, 50]));
+        controller.close();
+      },
+    });
+
+    wireEngine(1, [
+      new Uint8Array([1]),
+      new Uint8Array([2]),
+      new Uint8Array([3]),
+    ]);
+
+    const resultStream = await decompressStream(stream);
+    await streamToUint8Array(resultStream);
+
+    expect(mockDecompressor.setInput).toHaveBeenNthCalledWith(
+      1,
+      new Uint8Array([10, 20, 30, 40, 50]),
+      0,
+      2
+    );
+    expect(mockDecompressor.setInput).toHaveBeenNthCalledWith(
+      2,
+      new Uint8Array([10, 20, 30, 40, 50]),
+      2,
+      2
+    );
+    expect(mockDecompressor.setInput).toHaveBeenNthCalledWith(
+      3,
+      new Uint8Array([10, 20, 30, 40, 50]),
+      4,
+      1
+    );
   });
 
   it("destroys decompressor on error", async () => {
@@ -390,13 +535,14 @@ describe("decompressStream (ReadableStream)", () => {
       },
     });
 
-    mockDecompressor.process.mockImplementation(() => {
+    mockDecompressor.setInput.mockImplementation(() => {});
+    mockDecompressor.hasInput.mockReturnValue(true);
+    mockDecompressor.decompressStep.mockImplementation(() => {
       throw new Error("Decompression failed");
     });
 
     const resultStream = await decompressStream(stream);
 
-    // Consuming the stream triggers the error and cleanup
     await expect(streamToUint8Array(resultStream)).rejects.toThrow(
       "Decompression failed"
     );
