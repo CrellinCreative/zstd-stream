@@ -28,7 +28,8 @@
     "prepack": "npm run clean && npm run build",
     "prepublishOnly": "npm test",
     "pack:check": "npm run prepack && npm pack --dry-run",
-    "publish:dry": "npm publish --dry-run"
+    "publish:dry": "npm publish --dry-run",
+    "benchmark": "npm run build && node benchmarks/compression-bench.js"
   },
   "keywords": [
     "zstd",

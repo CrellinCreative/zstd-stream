@@ -2,9 +2,10 @@
 
 # zstd-stream
 
-**Streaming Zstandard compression for Node.js and browsers — zero external dependencies, bounded memory.**
+**Efficient Zstandard compression for Browsers and Node.js**
 
 [![npm version](https://img.shields.io/npm/v/zstd-stream.svg)](https://www.npmjs.com/package/zstd-stream)
+[![install size](https://img.shields.io/badge/install%20size-279%20kB-blue.svg)](https://www.npmjs.com/package/zstd-stream)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![TypeScript](https://img.shields.io/badge/TypeScript-Ready-brightgreen.svg)](https://www.typescriptlang.org/)
 [![Browser Demo](https://img.shields.io/badge/demo-live-brightgreen)](https://crellincreative.github.io/zstd-stream/)
@@ -27,11 +28,32 @@ WebAssembly build **embedded** — no `.wasm` asset to host or configure.
 
 ---
 
+## Unrivaled performance
+
+Compressing **1 GB** — `zstd-stream` vs. the browser-capable libraries you'd otherwise reach for:
+
+| Library                             | Compression | Speed        | Memory      | 4 GB+ files |
+| :---------------------------------- | ----------: | -----------: | ----------: | :---------: |
+| **zstd-stream**                     |    **5.5×** | **102 MB/s** |   **34 MB** |    **✓**    |
+| browser gzip (`CompressionStream`)  |        3.5× |     49 MB/s  |       38 MB |      ✓      |
+| [fflate](https://npmjs.com/fflate)  |        3.3× |     32 MB/s  |      1.6 GB |      ✗      |
+| [pako](https://npmjs.com/pako)      |        3.5× |     20 MB/s  |      1.6 GB |      ✗      |
+| [@bokuweb/zstd-wasm](https://npmjs.com/@bokuweb/zstd-wasm) | — | — | &gt;2 GB → OOM | ✗ |
+
+Better compression, 2–5× the speed, **~50× less memory**, and the only one that keeps going past a
+browser tab's ~2 GB `ArrayBuffer` limit.
+
+<sub>Measured on 1 GB of log-like data via [`benchmarks/compression-bench.js`](benchmarks/compression-bench.js); ratios depend on your data, memory and scaling don't.</sub>
+
+---
+
 ## Installation
 
 ```bash
 npm install zstd-stream
 ```
+
+There's also a [live browser demo](https://crellincreative.github.io/zstd-stream/) — a small Angular app that compresses files entirely in the browser, no install required.
 
 ---
 
