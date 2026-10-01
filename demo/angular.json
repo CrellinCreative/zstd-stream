@@ -30,7 +30,7 @@
               }
             ],
             "styles": ["src/styles.scss"],
-            "externalDependencies": ["node:zlib", "node:util", "node:vm"],
+            "externalDependencies": ["node:zlib", "node:util"],
             "allowedCommonJsDependencies": ["streamsaver"]
           },
           "configurations": {

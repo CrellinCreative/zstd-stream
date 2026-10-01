@@ -3,16 +3,26 @@ import type { Module } from "./types.js";
 
 const EMPTY = new Uint8Array(0);
 
+/** Read the C string returned by `ZSTD_getErrorName`. */
+function errorName(m: Module, code: number): string {
+  const p = m._getErrorName(code);
+  return new TextDecoder().decode(m.HEAPU8.subarray(p, m.HEAPU8.indexOf(0, p)));
+}
+
 // ZSTD operation modes for the streaming wrapper.
 const ZSTD_E_CONTINUE = 0;
 const ZSTD_E_END = 2;
 
 // Supported compression levels. 20-22 ("ultra") are excluded: in streaming mode
-// they pin the window to 128 MB, forcing every decompressor to allocate 128 MB
-// even for tiny files, and cost hundreds of MB to compress.
+// they pin the window to 32-128 MB, forcing every decompressor to allocate that
+// much even for tiny files, and cost 200 MB-1 GB of WASM heap to compress.
 const MIN_LEVEL = 1;
 const MAX_LEVEL = 19;
 const DEFAULT_LEVEL = 3;
+
+// Set by the wasm wrapper on _decompressStream results when the decoder sits
+// between frames.
+const FRAME_DONE = 1n << 62n;
 
 /**
  * Coerce a requested level into the supported 1-19 range, warning (rather than
@@ -167,7 +177,7 @@ export class ZstdCompressor extends BaseProcessor {
     );
 
     if (result < 0) {
-      throw new Error(`Compression failed: ${m._getErrorName(-result)}`);
+      throw new Error(`Compression failed: ${errorName(m, -result)}`);
     }
 
     return result === 0
@@ -213,6 +223,8 @@ export class ZstdDecompressor extends BaseProcessor {
   // Position within the slice currently resident in the WASM input buffer.
   private inLen = 0;
   private inPos = 0;
+  // False while a frame is partially decoded.
+  private frameDone = true;
 
   async init(): Promise<void> {
     const m = (this.module = getModule());
@@ -263,15 +275,13 @@ export class ZstdDecompressor extends BaseProcessor {
       this.inLen - this.inPos
     );
 
-    if (result < 0) {
-      const errorCode = Number(BigInt(result) & 0x7fffffffffffffffn);
-      throw new Error(
-        `Decompression failed: ${m._getErrorName(errorCode)}`
-      );
+    if (result < 0n) {
+      throw new Error(`Decompression failed: ${errorName(m, Number(result & 0xffffffffn))}`);
     }
 
-    const consumed = Number(BigInt(result) >> 32n);
-    const outputSize = Number(BigInt(result) & 0xffffffffn);
+    this.frameDone = (result & FRAME_DONE) !== 0n;
+    const consumed = Number((result >> 32n) & 0x3fffffffn);
+    const outputSize = Number(result & 0xffffffffn);
 
     if (consumed === 0 && outputSize === 0) {
       throw new Error("Decompression stalled");
@@ -304,7 +314,15 @@ export class ZstdDecompressor extends BaseProcessor {
       pos += n;
     }
 
+    this.assertComplete();
     return concat(chunks);
+  }
+
+  /** Throw if the input ended partway through a frame. */
+  assertComplete(): void {
+    if (!this.frameDone) {
+      throw new Error("Decompression failed: truncated input (incomplete frame)");
+    }
   }
 
   private requireModule(): Module {

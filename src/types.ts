@@ -12,19 +12,19 @@ export interface Module {
     src: number,
     srcSize: number,
     end: number
-  ): number;
+  ): bigint;
   _decompressStream(
     ctx: number,
     dst: number,
     dstSize: number,
     src: number,
     srcSize: number
-  ): number;
+  ): bigint;
   _dStreamOutSize(): number;
   _cStreamOutSize(): number;
   _cStreamInSize(): number;
   _dStreamInSize(): number;
-  _getErrorName(error: number): string;
+  _getErrorName(error: number): number; // char*
   _malloc(size: number): number;
   _free(ptr: number): void;
   HEAPU8: Uint8Array;

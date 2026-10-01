@@ -401,6 +401,7 @@ describe("decompressStream (ReadableStream)", () => {
     >;
     hasInput: jest.Mock<() => boolean>;
     decompressStep: jest.Mock<() => Uint8Array>;
+    assertComplete: jest.Mock<() => void>;
     destroy: jest.Mock<() => void>;
   };
 
@@ -431,6 +432,7 @@ describe("decompressStream (ReadableStream)", () => {
         jest.fn<(d: Uint8Array, o: number, l: number) => void>(),
       hasInput: jest.fn<() => boolean>(),
       decompressStep: jest.fn<() => Uint8Array>(),
+      assertComplete: jest.fn<() => void>(),
       destroy: jest.fn<() => void>(),
     };
 

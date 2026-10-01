@@ -5,7 +5,7 @@
 **Efficient Zstandard compression for Browsers and Node.js**
 
 [![npm version](https://img.shields.io/npm/v/zstd-stream.svg)](https://www.npmjs.com/package/zstd-stream)
-[![install size](https://img.shields.io/badge/install%20size-279%20kB-blue.svg)](https://www.npmjs.com/package/zstd-stream)
+[![install size](https://img.shields.io/badge/install%20size-163%20kB-blue.svg)](https://www.npmjs.com/package/zstd-stream)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![TypeScript](https://img.shields.io/badge/TypeScript-Ready-brightgreen.svg)](https://www.typescriptlang.org/)
 [![Browser Demo](https://img.shields.io/badge/demo-live-brightgreen)](https://crellincreative.github.io/zstd-stream/)
@@ -22,7 +22,8 @@ WebAssembly build **embedded** — no `.wasm` asset to host or configure.
 - 🌊 **Streaming first** — process multi-GB data in fixed ~128 KB buffers
 - ⚡ **Backpressure built in** — a slow writer automatically throttles the reader, so memory never runs away
 - 📦 **Zero external assets** — WASM is bundled in; `npm install` and import
-- 🌍 **Universal** — the same code runs in Node.js 18+ and modern browsers
+- 🛡️ **Integrity checked** — every frame carries a checksum; corrupt or truncated input is rejected
+- 🌍 **Universal** — the same code runs in Node.js 18+ and every modern browser
 - 🔧 **ESM + TypeScript** — full type definitions included
 - 📊 **Progress callbacks** — observe bytes processed in real time
 
@@ -34,16 +35,24 @@ Compressing **1 GB** — `zstd-stream` vs. the browser-capable libraries you'd o
 
 | Library                             | Compression | Speed        | Memory      | 4 GB+ files |
 | :---------------------------------- | ----------: | -----------: | ----------: | :---------: |
-| **zstd-stream**                     |    **5.5×** | **102 MB/s** |   **34 MB** |    **✓**    |
-| browser gzip (`CompressionStream`)  |        3.5× |     49 MB/s  |       38 MB |      ✓      |
-| [fflate](https://npmjs.com/fflate)  |        3.3× |     32 MB/s  |      1.6 GB |      ✗      |
-| [pako](https://npmjs.com/pako)      |        3.5× |     20 MB/s  |      1.6 GB |      ✗      |
+| **zstd-stream**                     |    **5.5×** | **147 MB/s** |   **35 MB** |    **✓**    |
+| browser gzip (`CompressionStream`)  |        3.5× |     51 MB/s  |       37 MB |      ✓      |
+| [zstd-codec](https://npmjs.com/zstd-codec) |  5.5× |     78 MB/s  |      1.6 GB |      ✗      |
+| [fflate](https://npmjs.com/fflate)  |        3.3× |     36 MB/s  |      1.6 GB |      ✗      |
+| [pako](https://npmjs.com/pako)      |        3.5× |     22 MB/s  |      1.6 GB |      ✗      |
 | [@bokuweb/zstd-wasm](https://npmjs.com/@bokuweb/zstd-wasm) | — | — | &gt;2 GB → OOM | ✗ |
 
-Better compression, 2–5× the speed, **~50× less memory**, and the only one that keeps going past a
-browser tab's ~2 GB `ArrayBuffer` limit.
+Top compression, 2–7× the speed, **~45× less memory** than in-memory libraries, and the only zstd
+library that keeps going past a browser tab's ~2 GB `ArrayBuffer` limit.
 
-<sub>Measured on 1 GB of log-like data via [`benchmarks/compression-bench.js`](benchmarks/compression-bench.js); ratios depend on your data, memory and scaling don't.</sub>
+<sub>Median of 3 runs on 1 GB of log-like data via [`benchmarks/compression-bench.js`](benchmarks/compression-bench.js) (Node 22); ratios depend on your data, memory and scaling don't.</sub>
+
+### Proven at scale
+
+- **4 GB streams** verified byte-for-byte in Chrome, Edge, Firefox, Safari (WebKit) and Node.js — the WASM heap never grew past its initial 32 MB
+- **Identical output in every engine**, and it decompresses native zstd output from any level — even the ultra levels it doesn't compress with
+- **Corruption caught** — every random bit flip and truncation tested was rejected with an error
+- **Small footprint** — 163 kB installed
 
 ---
 
@@ -171,12 +180,24 @@ The streaming API is built to handle data far larger than available RAM:
   never decoded into a single allocation.
 - **Backpressure** — output is produced lazily, one slice per read, so a slow
   consumer (disk, network) throttles reads from the source. A fast producer
-  cannot outrun a slow consumer and pile up in memory.
-- **Tunable buffering** — `highWaterMark` (bytes) sets how much output may queue
-  before reads pause. Larger values trade memory for throughput.
+  cannot outrun a slow consumer and pile up in memory — even for input that
+  compresses thousands to one.
+- **Tunable buffering** — `highWaterMark` (bytes) sets how far a stream may run
+  ahead of its consumer. Larger values trade memory for throughput.
+- **Cancel what you don't finish** — each open stream holds a zstd context in
+  the shared WASM heap (up to ~90 MB at level 19; the heap is capped at 1.5 GB).
+  Reading to the end or calling `cancel()` frees it immediately; a dropped
+  stream is only freed whenever the garbage collector gets to it.
 
 The one-shot `compress` / `decompress` helpers, by contrast, hold the entire
 input and output in memory — use them only for small data.
+
+## Data integrity
+
+Compressed frames include a content checksum, and decompression verifies it.
+Corrupted, truncated, or non-zstd input rejects with an error rather than
+yielding partial or wrong output. Cancelling the output stream, or an error
+while processing, also cancels the source stream.
 
 ---
 
@@ -192,7 +213,7 @@ Compress a stream. The primary API.
 - `options?: CompressOptions`
   - `level?: number` — compression level 1–19 (default: `3`)
   - `onProgress?: (bytesWritten: number) => void` — cumulative compressed bytes
-  - `highWaterMark?: number` — output bytes buffered before backpressure pauses the source (default: 1 MiB)
+  - `highWaterMark?: number` — source bytes compression may read ahead of the consumer (default: 1 MiB)
 
 **Returns:** `Promise<ReadableStream<Uint8Array>>`
 
@@ -243,12 +264,15 @@ await initialize(); // e.g. during app startup
 ## Compression levels
 
 Levels **1–19** are supported (default: `3`). Higher levels compress more but
-cost more time and memory; "ultra" levels 20–22 are intentionally excluded
-because, in streaming mode, they force every decompressor to allocate a 128 MB
-window — even for tiny inputs.
+cost more time and memory; "ultra" levels 20–22 are intentionally excluded:
+in streaming mode they force every decompressor to allocate a 32–128 MB window
+(vs 8 MB at level 19), even for tiny inputs, and need 200 MB–1 GB of WASM heap to
+compress, for well under 1% smaller output.
 
 Out-of-range values are clamped to the nearest valid level (with a
 `console.warn`) rather than throwing — e.g. `level: 22` runs as `19`.
+Decompression is unaffected: data compressed at any level, including 20–22 by
+other zstd tools, decompresses normally.
 
 | Level | Speed     | Ratio    | Typical use                   |
 | ----- | --------- | -------- | ----------------------------- |
@@ -278,11 +302,13 @@ const options: CompressOptions = {
 | Environment | Minimum |
 | ----------- | ------- |
 | Node.js     | 18      |
-| Chrome/Edge | 80      |
+| Chrome/Edge | 85      |
 | Firefox     | 113     |
 | Safari      | 16.4    |
 
-Requires WebAssembly and ES2022 support.
+Requires WebAssembly and ES2022 support. Pages with a Content Security Policy
+must allow `script-src blob: 'wasm-unsafe-eval'` (the embedded module is
+loaded from a `blob:` URL and compiled at runtime).
 
 ---
 

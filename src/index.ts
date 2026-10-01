@@ -5,19 +5,27 @@ export interface CompressOptions {
   level?: number; // 1-19, default 3
   onProgress?: (bytesWritten: number) => void;
   /**
-   * Max bytes of output buffered before backpressure pauses reading the
-   * source. Larger values trade memory for throughput. Default: 1 MiB.
+   * How far (in source bytes) compression may run ahead of the consumer
+   * before backpressure pauses reading the source. Larger values trade
+   * memory for throughput. Default: 1 MiB.
    */
   highWaterMark?: number;
 }
 
 export interface DecompressOptions {
   onProgress?: (bytesWritten: number) => void;
-  /** See {@link CompressOptions.highWaterMark}. Default: 1 MiB. */
+  /**
+   * Max bytes of output buffered before backpressure pauses reading the
+   * source. Larger values trade memory for throughput. Default: 1 MiB.
+   */
   highWaterMark?: number;
 }
 
 const DEFAULT_HIGH_WATER_MARK = 1024 * 1024;
+
+// Frees WASM memory of output streams dropped without being read to the end
+// or cancelled. Best effort: GC timing is not tied to WASM heap pressure.
+const finalizer = new FinalizationRegistry<{ destroy(): void }>((p) => p.destroy());
 
 let initialized = false;
 
@@ -62,14 +70,16 @@ export async function compressStream(
   let chunk: Uint8Array | null = null; // current source chunk
   let chunkPos = 0; // bytes of `chunk` already fed
   let finishing = false; // source drained, flushing the frame
+  let consumed = 0; // source bytes fed since the last enqueue
   let totalWritten = 0;
 
-  const release = () => {
-    reader.releaseLock();
+  const release = (reason?: unknown) => {
+    reader.cancel(reason).catch(() => {});
     compressor.destroy();
+    finalizer.unregister(compressor);
   };
 
-  return new ReadableStream<Uint8Array>(
+  const stream = new ReadableStream<Uint8Array>(
     {
       // Produce exactly one output slice per pull so the returned stream's
       // queue (and thus how far we read ahead of the consumer) stays bounded.
@@ -83,8 +93,10 @@ export async function compressStream(
               );
               const out = compressor.compressStep(chunk, chunkPos, n);
               chunkPos += n;
+              consumed += n;
               if (out.length) {
                 controller.enqueue(out);
+                consumed = 0;
                 totalWritten += out.length;
                 onProgress?.(totalWritten);
                 return;
@@ -118,17 +130,22 @@ export async function compressStream(
             return;
           }
         } catch (error) {
-          release();
+          release(error);
           controller.error(error);
         }
       },
 
-      cancel() {
-        release();
+      cancel(reason) {
+        release(reason);
       },
     },
-    new ByteLengthQueuingStrategy({ highWaterMark })
+    // Count each chunk as the larger of its size and the source bytes that
+    // produced it: highly compressible input (e.g. zeros, ~30000:1) would
+    // otherwise be read far ahead of the consumer to fill an output budget.
+    { highWaterMark, size: (out) => Math.max(out.byteLength, consumed) }
   );
+  finalizer.register(stream, compressor, compressor);
+  return stream;
 }
 
 // Decompress Uint8Array -> Uint8Array
@@ -166,12 +183,13 @@ export async function decompressStream(
   let chunkPos = 0; // bytes of `chunk` already loaded into WASM
   let totalWritten = 0;
 
-  const release = () => {
-    reader.releaseLock();
+  const release = (reason?: unknown) => {
+    reader.cancel(reason).catch(() => {});
     decompressor.destroy();
+    finalizer.unregister(decompressor);
   };
 
-  return new ReadableStream<Uint8Array>(
+  const stream = new ReadableStream<Uint8Array>(
     {
       // One output slice per pull. A small compressed slice can expand to many
       // gigabytes, so we never decode more than one output buffer ahead of the
@@ -202,6 +220,7 @@ export async function decompressStream(
 
             const { done, value } = await reader.read();
             if (done) {
+              decompressor.assertComplete();
               controller.close();
               release();
               return;
@@ -211,17 +230,19 @@ export async function decompressStream(
             chunkPos = 0;
           }
         } catch (error) {
-          release();
+          release(error);
           controller.error(error);
         }
       },
 
-      cancel() {
-        release();
+      cancel(reason) {
+        release(reason);
       },
     },
     new ByteLengthQueuingStrategy({ highWaterMark })
   );
+  finalizer.register(stream, decompressor, decompressor);
+  return stream;
 }
 
 export async function initialize(): Promise<void> {

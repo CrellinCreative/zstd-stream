@@ -1,81 +1,39 @@
-import { lib } from "./lib.js";
+import { glue, wasm } from "./lib.js";
 import type { Module } from "./types.js";
 
 let module: Module | null = null;
 let initPromise: Promise<void> | null = null;
 const isNode = typeof process !== "undefined" && process.versions?.node != null;
 
-async function loadGzipped(): Promise<string> {
+/** Inflate one of the embedded gzipped, base64-encoded payloads. */
+async function inflate(payload: string): Promise<Uint8Array> {
   if (isNode) {
     // Node.js path
     const { gunzip } = await import("node:zlib");
     const { promisify } = await import("node:util");
-    const binaryData = Buffer.from(lib, "base64");
-    const decompressed = await promisify(gunzip)(binaryData);
-    return decompressed.toString("utf-8");
+    return promisify(gunzip)(Buffer.from(payload, "base64"));
   }
 
   // Browser path
-  const binaryString = atob(lib);
+  const binaryString = atob(payload);
   const binaryData = Uint8Array.from(binaryString, (char) =>
     char.charCodeAt(0)
   );
   const stream = new Blob([binaryData])
     .stream()
     .pipeThrough(new DecompressionStream("gzip"));
-  const buffer = await new Response(stream).arrayBuffer();
-  return new TextDecoder().decode(buffer);
+  return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 
 async function evaluateCode(code: string): Promise<any> {
   if (isNode) {
-    try {
-      // Try using data URL import (works in Node.js v22+)
-      const url = `data:text/javascript,${encodeURIComponent(code)}`;
-      const mod = await import(/* @vite-ignore */ url);
-      return mod.default || mod.ZstdWasm || mod;
-    } catch {
-      // Older Node (pre-22) can't import a data: URL — fall back to vm.
-      const vm = await import("node:vm");
-
-      // Create a context with required globals
-      const context = vm.createContext({
-        ...globalThis, // Start with real globals
-        // Override only what's needed
-        console,
-        TextEncoder,
-        TextDecoder,
-      });
-
-      // Create and evaluate as ESM
-      const mod = new vm.SourceTextModule(code, {
-        context,
-        identifier: "zstd-bundle.js",
-        importModuleDynamically: async (specifier: string) => {
-          // Allow dynamic ESM imports (e.g., import("node:buffer"))
-          // Most embedded bundles won't use this, but safe to allow
-          try {
-            return await import(/* @vite-ignore */ specifier);
-          } catch {
-            throw new Error(`Dynamic import not supported: ${specifier}`);
-          }
-        },
-      });
-
-      // Link — since it's a self-contained bundle, it likely has no static imports
-      // If it does, you'd need a resolver — but most don't
-      await mod.link((specifier) => {
-        throw new Error(`Static import not supported: ${specifier}`);
-      });
-
-      await mod.evaluate();
-
-      const ns = mod.namespace;
-      return (ns as any).default || (ns as any).ZstdWasm || ns;
-    }
+    // Node (18+) can import a data: URL directly.
+    const url = `data:text/javascript,${encodeURIComponent(code)}`;
+    const mod = await import(/* @vite-ignore */ url);
+    return mod.default || mod.ZstdWasm || mod;
   }
 
-  // Browser path — unchanged
+  // Browser path
   const { URL } = globalThis;
   const blob = new Blob([code], { type: "application/javascript" });
   const url = URL.createObjectURL(blob);
@@ -92,9 +50,11 @@ export async function initZstd(): Promise<void> {
   if (module) return;
   initPromise = (async () => {
     try {
-      const code = await loadGzipped();
-      const loader = await evaluateCode(code);
-      module = await loader();
+      const [code, wasmBinary] = await Promise.all([inflate(glue), inflate(wasm)]);
+      const loader = await evaluateCode(new TextDecoder().decode(code));
+      // The binary is supplied inline; locateFile stops the glue from deriving
+      // a URL for it (nothing is ever fetched).
+      module = await loader({ wasmBinary, locateFile: () => "" });
       if (!module) throw new Error("WASM module initialization returned null");
     } catch (error) {
       initPromise = null;

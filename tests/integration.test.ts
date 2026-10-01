@@ -404,9 +404,12 @@ describe("Integration Tests", () => {
         if (done) break;
       }
 
-      // Reading 5 output chunks must not have drained the whole source.
+      // Let any background prefill settle, then check read-ahead: this source
+      // compresses ~30000:1, so an output-sized budget would drain all 128 MB.
+      // Source bytes must stay within a few multiples of highWaterMark.
+      await new Promise((resolve) => setTimeout(resolve, 200));
       expect(produced).toBeGreaterThan(0);
-      expect(produced).toBeLessThan(TOTAL_CHUNKS);
+      expect(produced * CHUNK).toBeLessThanOrEqual(2 * 1024 * 1024);
       await reader.cancel();
     }, 20000);
 
@@ -551,5 +554,57 @@ describe("Integration Tests", () => {
 
     //     expect(produced).toBe(50);
     //   }, 30000);
+  });
+});
+
+describe("integrity", () => {
+  const data = new TextEncoder().encode("integrity ".repeat(50_000));
+  let frame: Uint8Array;
+  const chunked = (bytes: Uint8Array, size = 1000) =>
+    new ReadableStream<Uint8Array>({
+      start(c) {
+        for (let i = 0; i < bytes.length; i += size) c.enqueue(bytes.slice(i, i + size));
+        c.close();
+      },
+    });
+
+  beforeAll(async () => {
+    await initialize();
+    frame = await compress(data);
+  });
+
+  it.each([1, 6, 0.5])("rejects input truncated to %p of a frame", async (keep) => {
+    const cut = frame.subarray(0, keep < 1 ? frame.length * keep : frame.length - keep);
+    await expect(decompress(cut)).rejects.toThrow(/truncated/);
+    await expect(streamToArray(await decompressStream(chunked(cut)))).rejects.toThrow(/truncated/);
+  });
+
+  it("accepts concatenated frames split into 1-byte chunks", async () => {
+    const two = new Uint8Array([...frame, ...frame]);
+    const out = await streamToArray(await decompressStream(chunked(two, 1)));
+    expect(out.length).toBe(data.length * 2);
+  });
+
+  it("writes a checksum and rejects data that fails it", async () => {
+    expect(frame[4] & 0x04).toBe(0x04); // Frame_Header_Descriptor checksum flag
+    const bad = frame.slice();
+    bad[bad.length - 1] ^= 0x01; // last byte of the content checksum
+    await expect(decompress(bad)).rejects.toThrow(/checksum/);
+  });
+
+  it("reports zstd error names", async () => {
+    await expect(decompress(new Uint8Array(8).fill(1))).rejects.toThrow(
+      "Decompression failed: Unknown frame descriptor"
+    );
+  });
+
+  it("cancels the source when the output stream is cancelled", async () => {
+    let reason: unknown;
+    const source = new ReadableStream<Uint8Array>({
+      pull: (c) => c.enqueue(new Uint8Array(65536)),
+      cancel: (r) => void (reason = r),
+    });
+    await (await compressStream(source)).cancel("stop");
+    expect(reason).toBe("stop");
   });
 });

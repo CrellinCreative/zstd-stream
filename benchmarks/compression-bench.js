@@ -3,7 +3,8 @@
  * app actually reaches for.
  *
  * The comparison is against browser-capable options — `pako`, `fflate`, the
- * browser-native `CompressionStream` (gzip), and WASM zstd (`@bokuweb/zstd-wasm`)
+ * browser-native `CompressionStream` (gzip), and the popular zstd ports
+ * (`zstd-codec`, `@bokuweb/zstd-wasm`)
  * — not Node's native `node:zlib`, which isn't available in a browser and so
  * isn't a real alternative here.
  *
@@ -19,7 +20,7 @@
  * Run it (build the library first so `dist/` exists):
  *
  *   npm run build
- *   npm i -D pako fflate @bokuweb/zstd-wasm   # the competitors (optional)
+ *   npm i --no-save pako fflate zstd-codec @bokuweb/zstd-wasm   # competitors (optional)
  *   node benchmarks/compression-bench.js
  *
  * Options (environment variables):
@@ -194,6 +195,23 @@ async function loadOptional() {
       kind: "gzip, in-memory",
       streams: false,
       run: (n) => pako.gzip(fullBuffer(n), { level: 6 }).length,
+    });
+  } catch {}
+  try {
+    const { ZstdCodec } = (await import("zstd-codec")).default;
+    const zstd = await new Promise((resolve) => ZstdCodec.run(resolve));
+    // Its `Simple` API aborts above ~4 MB; `Streaming` handles large inputs
+    // but needs every chunk in memory up front, so give it the whole input.
+    libs.push({
+      name: "zstd-codec",
+      kind: "zstd, in-memory",
+      streams: false,
+      run: (n) => {
+        const all = fullBuffer(n);
+        const chunks = [];
+        for (let i = 0; i < n; i += CHUNK) chunks.push(all.subarray(i, i + CHUNK));
+        return new zstd.Streaming().compressChunks(chunks, n, 3).length;
+      },
     });
   } catch {}
   try {
