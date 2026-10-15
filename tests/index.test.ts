@@ -320,6 +320,18 @@ describe("compressStream (ReadableStream)", () => {
     );
     expect(mockCompressor.destroy).toHaveBeenCalled();
   });
+
+  it("leaves the source unlocked when init fails", async () => {
+    const stream = new ReadableStream<Uint8Array>();
+    mockCompressor.init.mockRejectedValue(
+      new Error("Failed to allocate compression buffers")
+    );
+
+    await expect(compressStream(stream)).rejects.toThrow(
+      "Failed to allocate compression buffers"
+    );
+    expect(stream.locked).toBe(false);
+  });
 });
 
 describe("decompress (Uint8Array)", () => {
@@ -549,5 +561,17 @@ describe("decompressStream (ReadableStream)", () => {
       "Decompression failed"
     );
     expect(mockDecompressor.destroy).toHaveBeenCalled();
+  });
+
+  it("leaves the source unlocked when init fails", async () => {
+    const stream = new ReadableStream<Uint8Array>();
+    mockDecompressor.init.mockRejectedValue(
+      new Error("Failed to allocate decompression buffers")
+    );
+
+    await expect(decompressStream(stream)).rejects.toThrow(
+      "Failed to allocate decompression buffers"
+    );
+    expect(stream.locked).toBe(false);
   });
 });

@@ -63,9 +63,10 @@ export async function compressStream(
   const { level = 3, onProgress, highWaterMark = DEFAULT_HIGH_WATER_MARK } =
     options || {};
 
-  const reader = input.getReader();
   const compressor = new ZstdCompressor(level);
   await compressor.init();
+  // Lock the source only once init has succeeded, so a failed init leaves it usable.
+  const reader = input.getReader();
 
   let chunk: Uint8Array | null = null; // current source chunk
   let chunkPos = 0; // bytes of `chunk` already fed
@@ -175,9 +176,9 @@ export async function decompressStream(
   await ensureInit();
   const { onProgress, highWaterMark = DEFAULT_HIGH_WATER_MARK } = options || {};
 
-  const reader = input.getReader();
   const decompressor = new ZstdDecompressor();
   await decompressor.init();
+  const reader = input.getReader();
 
   let chunk: Uint8Array | null = null; // current source chunk
   let chunkPos = 0; // bytes of `chunk` already loaded into WASM
