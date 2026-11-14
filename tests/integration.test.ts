@@ -1,6 +1,7 @@
 // src/__tests__/integration.test.ts
-import { beforeAll, describe, expect, it, jest } from "@jest/globals";
+import { afterEach, beforeAll, describe, expect, it, jest } from "@jest/globals";
 import { createHash, type Hash } from "node:crypto";
+import { ZstdCompressor, ZstdDecompressor } from "../src/compressor.js";
 import {
   compress,
   compressStream,
@@ -8,6 +9,8 @@ import {
   decompressStream,
   initialize,
 } from "../src/index.js";
+import { getModule } from "../src/loader.js";
+import type { Module } from "../src/types.js";
 
 // Native SHA-256 — Jest's `toEqual` is pathologically slow on multi-MB typed
 // arrays, so large buffers are compared by digest instead.
@@ -606,5 +609,50 @@ describe("integrity", () => {
     });
     await (await compressStream(source)).cancel("stop");
     expect(reason).toBe("stop");
+  });
+});
+
+describe("init failure", () => {
+  let m: Module;
+
+  beforeAll(async () => {
+    await initialize();
+    m = getModule();
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  // Let the first buffer allocate, then fail the second.
+  const failSecondMalloc = () => {
+    const malloc = m._malloc;
+    return jest.spyOn(m, "_malloc").mockImplementationOnce(malloc).mockReturnValueOnce(0);
+  };
+
+  it("compressor frees its context and buffer", async () => {
+    const createCtx = jest.spyOn(m, "_createCCtx");
+    const freeCtx = jest.spyOn(m, "_freeCCtx");
+    const free = jest.spyOn(m, "_free");
+    const malloc = failSecondMalloc();
+
+    await expect(new ZstdCompressor(3).init()).rejects.toThrow(
+      "Failed to allocate compression buffers"
+    );
+    expect(freeCtx.mock.calls).toEqual([[createCtx.mock.results[0].value]]);
+    expect(free.mock.calls).toEqual([[malloc.mock.results[0].value]]);
+  });
+
+  it("decompressor frees its context and buffer", async () => {
+    const createCtx = jest.spyOn(m, "_createDCtx");
+    const freeCtx = jest.spyOn(m, "_freeDCtx");
+    const free = jest.spyOn(m, "_free");
+    const malloc = failSecondMalloc();
+
+    await expect(new ZstdDecompressor().init()).rejects.toThrow(
+      "Failed to allocate decompression buffers"
+    );
+    expect(freeCtx.mock.calls).toEqual([[createCtx.mock.results[0].value]]);
+    expect(free.mock.calls).toEqual([[malloc.mock.results[0].value]]);
   });
 });
