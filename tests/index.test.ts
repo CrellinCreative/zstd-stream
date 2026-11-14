@@ -332,6 +332,14 @@ describe("compressStream (ReadableStream)", () => {
     );
     expect(stream.locked).toBe(false);
   });
+
+  it("destroys the compressor when the source is already locked", async () => {
+    const stream = new ReadableStream<Uint8Array>();
+    stream.getReader();
+
+    await expect(compressStream(stream)).rejects.toThrow("locked");
+    expect(mockCompressor.destroy).toHaveBeenCalled();
+  });
 });
 
 describe("decompress (Uint8Array)", () => {
@@ -573,5 +581,13 @@ describe("decompressStream (ReadableStream)", () => {
       "Failed to allocate decompression buffers"
     );
     expect(stream.locked).toBe(false);
+  });
+
+  it("destroys the decompressor when the source is already locked", async () => {
+    const stream = new ReadableStream<Uint8Array>();
+    stream.getReader();
+
+    await expect(decompressStream(stream)).rejects.toThrow("locked");
+    expect(mockDecompressor.destroy).toHaveBeenCalled();
   });
 });

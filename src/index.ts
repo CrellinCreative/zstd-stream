@@ -66,7 +66,13 @@ export async function compressStream(
   const compressor = new ZstdCompressor(level);
   await compressor.init();
   // Lock the source only once init has succeeded, so a failed init leaves it usable.
-  const reader = input.getReader();
+  let reader: ReadableStreamDefaultReader<Uint8Array>;
+  try {
+    reader = input.getReader();
+  } catch (error) {
+    compressor.destroy();
+    throw error;
+  }
 
   let chunk: Uint8Array | null = null; // current source chunk
   let chunkPos = 0; // bytes of `chunk` already fed
@@ -178,7 +184,13 @@ export async function decompressStream(
 
   const decompressor = new ZstdDecompressor();
   await decompressor.init();
-  const reader = input.getReader();
+  let reader: ReadableStreamDefaultReader<Uint8Array>;
+  try {
+    reader = input.getReader();
+  } catch (error) {
+    decompressor.destroy();
+    throw error;
+  }
 
   let chunk: Uint8Array | null = null; // current source chunk
   let chunkPos = 0; // bytes of `chunk` already loaded into WASM
